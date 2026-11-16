@@ -222,39 +222,93 @@ static const char *get_shell_variable(const char *name) {
 
 void expand_shell_variables(char **arglist) {
     for (int i = 0; arglist[i] != NULL; i++) {
-        if (arglist[i][0] != '$' || arglist[i][1] == '\0')
+        const char *input = arglist[i];
+        size_t capacity = strlen(input) + 1;
+        size_t used = 0;
+
+        char *result = malloc(capacity);
+        if (result == NULL)
             continue;
 
-        const char *name = arglist[i] + 1;
-        size_t length = strlen(name);
+        for (size_t j = 0; input[j] != '\0';) {
+            if (input[j] != '$') {
+                if (used + 2 > capacity) {
+                    capacity *= 2;
+                    char *temp = realloc(result, capacity);
+                    if (temp == NULL) {
+                        free(result);
+                        result = NULL;
+                        break;
+                    }
+                    result = temp;
+                }
+                result[used++] = input[j++];
+                continue;
+            }
 
-        /* Support ${NAME} as well */
+            size_t start = j + 1;
+            size_t end = start;
+            int braced = 0;
 
-        if (name[0] == '{' && length >= 2 &&
-            name[length - 1] == '}') {
-            name++;
-            length -= 2;
+            if (input[start] == '{') {
+                braced = 1;
+                start++;
+                end = start;
+
+                while (input[end] != '\0' && input[end] != '}')
+                    end++;
+
+                if (input[end] != '}') {
+                    result[used++] = input[j++];
+                    continue;
+                }
+            } else {
+                while (isalnum((unsigned char)input[end]) ||
+                       input[end] == '_')
+                    end++;
+            }
+
+            if (!valid_variable_name(input + start, end - start)) {
+                result[used++] = input[j++];
+                continue;
+            }
+
+            char *name = strndup(input + start, end - start);
+            if (name == NULL)
+                break;
+
+            const char *value = get_shell_variable(name);
+            free(name);
+
+            size_t value_length = strlen(value);
+
+            while (used + value_length + 1 > capacity) {
+                capacity *= 2;
+                char *temp = realloc(result, capacity);
+                if (temp == NULL) {
+                    free(result);
+                    result = NULL;
+                    break;
+                }
+                result = temp;
+            }
+
+            if (result == NULL)
+                break;
+
+            memcpy(result + used, value, value_length);
+            used += value_length;
+
+            j = braced ? end + 1 : end;
         }
 
-        if (!valid_variable_name(name, length))
-            continue;
-
-        char *variable_name = strndup(name, length);
-
-        if (variable_name == NULL)
-            continue;
-
-        char *replacement = strdup(get_shell_variable(variable_name));
-
-        free(variable_name);
-
-        if (replacement != NULL) {
+        if (result != NULL) {
+            result[used] = '\0';
             free(arglist[i]);
-            arglist[i] = replacement;
+            arglist[i] = result;
         }
     }
 }
-
 static void show_shell_variables(void) {
     ShellVariable *current = variables;
 
